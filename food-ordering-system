@@ -1,0 +1,276 @@
+restaurant-api/
+├── src/
+│   ├── controllers/           # 3 controladores completos
+│   │   ├── authController.js  # register, login, getProfile
+│   │   ├── dishController.js  # CRUD completo + filtros
+│   │   └── orderController.js # Validación de dishes + cálculo total
+│   │
+│   ├── middleware/            # 3 tipos de middleware
+│   │   ├── auth.js           # JWT + role-based (isAdmin, isCustomer)
+│   │   ├── errorHandler.js   # ApiError class + global handler
+│   │   └── validate.js       # Joi validation wrapper
+│   │
+│   ├── models/               # 3 modelos con relaciones
+│   │   ├── User.js          # bcrypt hooks + JWT methods
+│   │   ├── Dish.js          # Validaciones + métodos estáticos
+│   │   └── Order.js         # populate() + cálculo automático de total
+│   │
+│   ├── routes/              # 3 archivos de rutas
+│   │   ├── authRoutes.js    # POST /register, /login
+│   │   ├── dishRoutes.js    # CRUD + admin protection
+│   │   └── orderRoutes.js   # Orders con validación
+│   │
+│   ├── validators/          # 3 validadores Joi
+│   │   ├── authValidator.js
+│   │   ├── dishValidator.js
+│   │   └── orderValidator.js
+│   │
+│   ├── utils/
+│   │   ├── db.js           # Conexión MongoDB
+│   │   └── seed.js         # Datos de prueba
+│   │
+│   ├── app.js              # Configuración Express
+│   └── server.js           # Punto de entrada
+│
+├── .env.example            # Variables de entorno
+├── .gitignore
+├── package.json
+├── README.md               # Documentación completa
+└── API_EXAMPLES.md         # Ejemplos de cURL
+User Model
+javascript{
+  name: String,
+  email: String (unique),
+  password: String (bcrypt hash),
+  role: Enum ['customer', 'admin'],
+  createdAt: Date
+}
+
+// Métodos:
+- comparePassword()
+- generateAuthToken()
+- getPublicProfile()
+Dish Model
+javascript{
+  name: String,
+  description: String,
+  price: Number,
+  available: Boolean (default: true),
+  category: Enum,
+  preparationTime: Number,
+  createdAt: Date
+}
+
+// Métodos estáticos:
+- findAvailable()
+- findByCategory()
+Order Model (con relaciones)
+javascript{
+  userId: ObjectId → ref 'User',  // Populate automático
+  dishes: [{
+    dishId: ObjectId → ref 'Dish',  // Populate automático
+    quantity: Number,
+    price: Number  // Snapshot del precio
+  }],
+  total: Number,  // Calculado automáticamente
+  status: Enum ['pending', 'confirmed', 'preparing', 'ready', 'delivered', 'cancelled'],
+  deliveryAddress: Object,
+  paymentMethod: Enum,
+  createdAt: Date
+}
+
+// Populate automático en queries
+ Sistema de Autenticación
+JWT Implementation
+javascript// Middleware de autenticación
+const auth = async (req, res, next) => {
+  // Extrae token del header Authorization
+  // Verifica con jwt.verify()
+  // Añade req.user
+}
+
+// Middleware de roles
+const isAdmin = (req, res, next) => {
+  // Verifica req.user.role === 'admin'
+  // 403 si no es admin
+}
+Password Hashing
+javascript// Pre-save hook en User model
+userSchema.pre('save', async function(next) {
+  if (!this.isModified('password')) return next();
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
+});
+
+Validación con Joi
+Ejemplo: Create Order Validator
+javascriptconst createOrderSchema = Joi.object({
+  dishes: Joi.array()
+    .items(
+      Joi.object({
+        dishId: Joi.string()
+          .regex(/^[0-9a-fA-F]{24}$/)
+          .required(),
+        quantity: Joi.number()
+          .integer()
+          .min(1)
+          .required()
+      })
+    )
+    .min(1)
+    .required(),
+  deliveryAddress: Joi.object({...}),
+  paymentMethod: Joi.string().valid('cash', 'card', 'online')
+});
+
+Populate Automático
+javascript// En Order model - query middleware
+orderSchema.pre(/^find/, function(next) {
+  this.populate({
+    path: 'userId',
+    select: 'name email role'
+  }).populate({
+    path: 'dishes.dishId',
+    select: 'name price description available'
+  });
+  next();
+});
+
+// Resultado:
+{
+  userId: {
+    id: "...",
+    name: "John Doe",
+    email: "john@example.com"
+  },
+  dishes: [{
+    dishId: {
+      id: "...",
+      name: "Pizza",
+      price: 12.99
+    },
+    quantity: 2,
+    price: 12.99  // Snapshot
+  }]
+}
+
+Validación y Cálculo de Total
+javascriptconst createOrder = async (req, res) => {
+  // 1. Validar que todos los dishes existen
+  const dishIds = dishes.map(item => item.dishId);
+  const foundDishes = await Dish.find({ _id: { $in: dishIds } });
+  
+  if (foundDishes.length !== dishIds.length) {
+    throw new ApiError(400, 'One or more dishes not found');
+  }
+  
+  // 2. Verificar disponibilidad
+  for (const item of dishes) {
+    const dish = foundDishes.find(d => d._id.toString() === item.dishId);
+    if (!dish.available) {
+      throw new ApiError(400, `Dish "${dish.name}" not available`);
+    }
+  }
+  
+  // 3. Crear order items con price snapshot
+  const orderItems = dishes.map(item => {
+    const dish = foundDishes.find(d => d._id.toString() === item.dishId);
+    return {
+      dishId: dish._id,
+      quantity: item.quantity,
+      price: dish.price  // ← Snapshot del precio actual
+    };
+  });
+  
+  // 4. Calcular total
+  const total = orderItems.reduce((sum, item) => 
+    sum + (item.price * item.quantity), 0
+  );
+  
+  // 5. Crear orden
+  const order = await Order.create({
+    userId: req.user._id,
+    dishes: orderItems,
+    total
+  });
+};
+
+Manejo de Errores Centralizado
+javascript// Custom Error Class
+class ApiError extends Error {
+  constructor(statusCode, message, errors = null) {
+    super(message);
+    this.statusCode = statusCode;
+    this.errors = errors;
+    this.isOperational = true;
+  }
+}
+
+// Global Error Handler
+const errorHandler = (err, req, res, next) => {
+  let statusCode = err.statusCode || 500;
+  let message = err.message || 'Internal server error';
+  
+  // Mongoose validation errors
+  if (err.name === 'ValidationError') {
+    statusCode = 400;
+    errors = Object.values(err.errors).map(e => ({
+      field: e.path,
+      message: e.message
+    }));
+  }
+  
+  // Mongoose duplicate key
+  if (err.code === 11000) {
+    statusCode = 400;
+    message = 'Duplicate field value';
+  }
+  
+  res.status(statusCode).json({
+    success: false,
+    message,
+    errors
+  });
+};
+
+Paginación Implementada
+javascriptconst getAllDishes = async (req, res) => {
+  const { page = 1, limit = 10 } = req.query;
+  
+  const skip = (page - 1) * limit;
+  
+  const dishes = await Dish.find(filter)
+    .skip(skip)
+    .limit(parseInt(limit));
+  
+  const total = await Dish.countDocuments(filter);
+  
+  res.json({
+    success: true,
+    count: dishes.length,
+    pagination: {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total,
+      pages: Math.ceil(total / limit)
+    },
+    data: dishes
+  });
+};
+
+Cómo Usar
+1. Instalación
+bashcd restaurant-api
+npm install
+2. Configuración
+bashcp .env.example .env
+# Editar .env con tu MongoDB URI
+3. Poblar Base de Datos
+bashnode src/utils/seed.js
+4. Ejecutar
+bashnpm run dev  # Desarrollo
+npm start    # Producción
+5. Probar
+bash# Credenciales de prueba:
+Admin: admin@restaurant.com / admin123
+Customer: john@customer.com / password123
