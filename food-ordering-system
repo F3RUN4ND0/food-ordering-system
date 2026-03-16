@@ -1,276 +1,1126 @@
+# Food Ordering System API
+
+REST API para un sistema de órdenes de restaurante con autenticación JWT, validación de datos y control de acceso basado en roles.
+
+##  Descripción del Proyecto
+
+Sistema backend completo para gestionar pedidos de restaurante que incluye:
+
+- **Autenticación segura** con JWT y bcrypt
+- **Control de acceso basado en roles** (Customer y Admin)
+- **Validación robusta** de datos con Joi
+- **Relaciones entre modelos** usando Mongoose populate
+- **Snapshots de precios** para mantener historial preciso de órdenes
+- **Paginación** en listados
+- **Manejo centralizado de errores**
+
+### Tecnologías Utilizadas
+
+- Node.js v18+
+- Express.js
+- MongoDB + Mongoose
+- JWT (jsonwebtoken)
+- Bcrypt
+- Joi
+- CORS
+- Express Rate Limit
+
+---
+
+##  Instalación
+
+### 1. Clonar el repositorio
+
+```bash
+git clone https://github.com/F3RUN4ND0/food-ordering-system.git
+cd food-ordering-system
+```
+
+### 2. Instalar dependencias
+
+```bash
+npm install
+```
+
+### 3. Configurar variables de entorno
+
+Copiar el archivo de ejemplo y editarlo con tus valores:
+
+```bash
+cp .env.example .env
+```
+
+**Archivo `.env.example`:**
+
+```env
+# Server Configuration
+NODE_ENV=development
+PORT=5000
+
+# Database
+MONGODB_URI=mongodb://localhost:27017/food_ordering
+# Para MongoDB Atlas:
+# MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/food_ordering
+
+# JWT Configuration
+JWT_SECRET=tu_clave_secreta_super_segura_aqui_cambiar_en_produccion
+JWT_EXPIRE=7d
+JWT_REFRESH_SECRET=tu_refresh_token_secret
+JWT_REFRESH_EXPIRE=30d
+
+# Security
+BCRYPT_SALT_ROUNDS=10
+
+# CORS
+FRONTEND_URL=http://localhost:3000
+
+# Rate Limiting
+RATE_LIMIT_WINDOW_MS=900000
+RATE_LIMIT_MAX_REQUESTS=100
+
+# Pagination
+DEFAULT_PAGE=1
+DEFAULT_LIMIT=10
+MAX_LIMIT=100
+```
+
+### 4. Poblar la base de datos (opcional)
+
+```bash
+node src/utils/seed.js
+```
+
+Esto creará usuarios y platos de ejemplo:
+- **Admin:** `admin@restaurant.com` / `admin123`
+- **Customer:** `john@customer.com` / `password123`
+
+---
+
+##  Cómo Ejecutar
+
+### Modo desarrollo (con auto-restart)
+
+```bash
+npm run dev
+```
+
+### Modo producción
+
+```bash
+npm start
+```
+
+### Verificar que el servidor está corriendo
+
+Abrir en el navegador: `http://localhost:5000/health`
+
+---
+
+##  Endpoints Documentados
+
+**Base URL:** `http://localhost:5000/api`
+
+---
+
+##  Autenticación (Auth)
+
+### Registrar Usuario
+
+```http
+POST /api/auth/register
+```
+
+**Body:**
+```json
+{
+  "name": "Juan Pérez",
+  "email": "juan@example.com",
+  "password": "123456",
+  "role": "customer"
+}
+```
+
+**Campos:**
+- `name` (string, requerido): Nombre completo (mín. 2 caracteres)
+- `email` (string, requerido): Email válido y único
+- `password` (string, requerido): Contraseña (mín. 6 caracteres)
+- `role` (string, opcional): `"customer"` o `"admin"` (default: `"customer"`)
+
+**Response exitosa (201):**
+```json
+{
+  "success": true,
+  "message": "User registered successfully",
+  "data": {
+    "user": {
+      "id": "65a1b2c3d4e5f6a7b8c9d0e1",
+      "name": "Juan Pérez",
+      "email": "juan@example.com",
+      "role": "customer",
+      "createdAt": "2024-01-15T10:30:00.000Z"
+    },
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  }
+}
+```
+
+**Errores posibles:**
+- `400` - Validación fallida (email inválido, contraseña muy corta, etc.)
+- `400` - Email ya registrado
+
+---
+
+### Iniciar Sesión
+
+```http
+POST /api/auth/login
+```
+
+**Body:**
+```json
+{
+  "email": "juan@example.com",
+  "password": "123456"
+}
+```
+
+**Response exitosa (200):**
+```json
+{
+  "success": true,
+  "message": "Login successful",
+  "data": {
+    "user": {
+      "id": "65a1b2c3d4e5f6a7b8c9d0e1",
+      "name": "Juan Pérez",
+      "email": "juan@example.com",
+      "role": "customer",
+      "createdAt": "2024-01-15T10:30:00.000Z"
+    },
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  }
+}
+```
+
+**Errores posibles:**
+- `401` - Email o contraseña incorrectos
+- `400` - Validación fallida
+
+---
+
+### Obtener Perfil
+
+```http
+GET /api/auth/me
+Authorization: Bearer {token}
+```
+
+**Headers:**
+```
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Response exitosa (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "user": {
+      "id": "65a1b2c3d4e5f6a7b8c9d0e1",
+      "name": "Juan Pérez",
+      "email": "juan@example.com",
+      "role": "customer",
+      "createdAt": "2024-01-15T10:30:00.000Z"
+    }
+  }
+}
+```
+
+**Errores posibles:**
+- `401` - Token no proporcionado o inválido
+- `401` - Token expirado
+
+---
+
+## Platos (Dishes)
+
+### Obtener Todos los Platos
+
+```http
+GET /api/dishes?page=1&limit=10&available=true&category=main_course&search=pizza
+```
+
+**Query Parameters (todos opcionales):**
+- `page` (number): Página actual (default: 1)
+- `limit` (number): Resultados por página (default: 10, max: 100)
+- `available` (boolean): Filtrar por disponibilidad (`true` o `false`)
+- `category` (string): Filtrar por categoría (`appetizer`, `main_course`, `dessert`, `beverage`, `side`)
+- `search` (string): Buscar en nombre y descripción
+
+**Response exitosa (200):**
+```json
+{
+  "success": true,
+  "count": 10,
+  "pagination": {
+    "page": 1,
+    "limit": 10,
+    "total": 25,
+    "pages": 3
+  },
+  "data": [
+    {
+      "id": "65a1b2c3d4e5f6a7b8c9d0e2",
+      "name": "Margherita Pizza",
+      "description": "Classic Italian pizza with tomato sauce, mozzarella, and fresh basil",
+      "price": 12.99,
+      "available": true,
+      "category": "main_course",
+      "image": "https://example.com/pizza.jpg",
+      "preparationTime": 15,
+      "createdAt": "2024-01-15T09:00:00.000Z",
+      "updatedAt": "2024-01-15T09:00:00.000Z"
+    }
+  ]
+}
+```
+
+**Acceso:** Público (no requiere autenticación)
+
+---
+
+### Obtener Plato por ID
+
+```http
+GET /api/dishes/:id
+```
+
+**Ejemplo:**
+```http
+GET /api/dishes/65a1b2c3d4e5f6a7b8c9d0e2
+```
+
+**Response exitosa (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "65a1b2c3d4e5f6a7b8c9d0e2",
+    "name": "Margherita Pizza",
+    "description": "Classic Italian pizza with tomato sauce, mozzarella, and fresh basil",
+    "price": 12.99,
+    "available": true,
+    "category": "main_course",
+    "image": "https://example.com/pizza.jpg",
+    "preparationTime": 15,
+    "createdAt": "2024-01-15T09:00:00.000Z",
+    "updatedAt": "2024-01-15T09:00:00.000Z"
+  }
+}
+```
+
+**Errores posibles:**
+- `404` - Plato no encontrado
+- `400` - ID inválido
+
+**Acceso:** Público
+
+---
+
+### Obtener Platos por Categoría
+
+```http
+GET /api/dishes/category/:category
+```
+
+**Ejemplo:**
+```http
+GET /api/dishes/category/dessert
+```
+
+**Categorías válidas:**
+- `appetizer`
+- `main_course`
+- `dessert`
+- `beverage`
+- `side`
+
+**Response exitosa (200):**
+```json
+{
+  "success": true,
+  "count": 3,
+  "data": [
+    {
+      "id": "65a1b2c3d4e5f6a7b8c9d0e5",
+      "name": "Tiramisu",
+      "description": "Classic Italian dessert",
+      "price": 7.99,
+      "category": "dessert"
+    }
+  ]
+}
+```
+
+**Acceso:** Público
+
+---
+
+### Crear Plato (Admin)
+
+```http
+POST /api/dishes
+Authorization: Bearer {admin_token}
+```
+
+**Body:**
+```json
+{
+  "name": "Spaghetti Carbonara",
+  "description": "Traditional Italian pasta with bacon, eggs, and parmesan cheese",
+  "price": 14.99,
+  "category": "main_course",
+  "preparationTime": 18,
+  "image": "https://example.com/carbonara.jpg"
+}
+```
+
+**Campos:**
+- `name` (string, requerido): Nombre del plato (3-100 caracteres)
+- `description` (string, requerido): Descripción (10-500 caracteres)
+- `price` (number, requerido): Precio (mayor a 0)
+- `category` (string, requerido): Categoría válida
+- `available` (boolean, opcional): Disponibilidad (default: `true`)
+- `preparationTime` (number, opcional): Tiempo en minutos (1-180)
+- `image` (string, opcional): URL de imagen
+
+**Response exitosa (201):**
+```json
+{
+  "success": true,
+  "message": "Dish created successfully",
+  "data": {
+    "id": "65a1b2c3d4e5f6a7b8c9d0e6",
+    "name": "Spaghetti Carbonara",
+    "description": "Traditional Italian pasta with bacon, eggs, and parmesan cheese",
+    "price": 14.99,
+    "available": true,
+    "category": "main_course",
+    "preparationTime": 18,
+    "createdAt": "2024-01-15T11:00:00.000Z"
+  }
+}
+```
+
+**Errores posibles:**
+- `401` - No autenticado
+- `403` - No es admin
+- `400` - Validación fallida
+
+**Acceso:** Solo Admin
+
+---
+
+### Actualizar Plato (Admin)
+
+```http
+PUT /api/dishes/:id
+Authorization: Bearer {admin_token}
+```
+
+**Body (todos los campos opcionales):**
+```json
+{
+  "price": 16.99,
+  "available": false,
+  "description": "Updated description"
+}
+```
+
+**Response exitosa (200):**
+```json
+{
+  "success": true,
+  "message": "Dish updated successfully",
+  "data": {
+    "id": "65a1b2c3d4e5f6a7b8c9d0e6",
+    "name": "Spaghetti Carbonara",
+    "price": 16.99,
+    "available": false,
+    "updatedAt": "2024-01-15T12:00:00.000Z"
+  }
+}
+```
+
+**Errores posibles:**
+- `401` - No autenticado
+- `403` - No es admin
+- `404` - Plato no encontrado
+- `400` - Validación fallida
+
+**Acceso:** Solo Admin
+
+---
+
+### Eliminar Plato (Admin)
+
+```http
+DELETE /api/dishes/:id
+Authorization: Bearer {admin_token}
+```
+
+**Response exitosa (200):**
+```json
+{
+  "success": true,
+  "message": "Dish deleted successfully",
+  "data": {
+    "id": "65a1b2c3d4e5f6a7b8c9d0e6",
+    "name": "Spaghetti Carbonara"
+  }
+}
+```
+
+**Errores posibles:**
+- `401` - No autenticado
+- `403` - No es admin
+- `404` - Plato no encontrado
+
+**Acceso:** Solo Admin
+
+---
+
+### Alternar Disponibilidad (Admin)
+
+```http
+PATCH /api/dishes/:id/availability
+Authorization: Bearer {admin_token}
+```
+
+**Response exitosa (200):**
+```json
+{
+  "success": true,
+  "message": "Dish enabled successfully",
+  "data": {
+    "id": "65a1b2c3d4e5f6a7b8c9d0e6",
+    "name": "Spaghetti Carbonara",
+    "available": true
+  }
+}
+```
+
+**Acceso:** Solo Admin
+
+---
+
+## Órdenes (Orders)
+
+### Crear Orden
+
+```http
+POST /api/orders
+Authorization: Bearer {token}
+```
+
+**Body:**
+```json
+{
+  "dishes": [
+    {
+      "dishId": "65a1b2c3d4e5f6a7b8c9d0e2",
+      "quantity": 2
+    },
+    {
+      "dishId": "65a1b2c3d4e5f6a7b8c9d0e3",
+      "quantity": 1
+    }
+  ],
+  "deliveryAddress": {
+    "street": "Calle Principal 123",
+    "city": "Ciudad de México",
+    "zipCode": "01000",
+    "notes": "Tocar el timbre"
+  },
+  "paymentMethod": "card",
+  "notes": "Sin cebolla por favor"
+}
+```
+
+**Campos:**
+- `dishes` (array, requerido): Array de objetos con `dishId` y `quantity`
+  - `dishId` (string, requerido): ID del plato (formato ObjectId de 24 caracteres hex)
+  - `quantity` (number, requerido): Cantidad (entero, mínimo 1)
+- `deliveryAddress` (object, opcional): Dirección de entrega
+  - `street` (string, requerido si se incluye)
+  - `city` (string, requerido si se incluye)
+  - `zipCode` (string, requerido si se incluye)
+  - `notes` (string, opcional)
+- `paymentMethod` (string, opcional): `"cash"`, `"card"`, o `"online"` (default: `"cash"`)
+- `notes` (string, opcional): Notas adicionales (max 500 caracteres)
+
+**Response exitosa (201):**
+```json
+{
+  "success": true,
+  "message": "Order created successfully",
+  "data": {
+    "id": "65a1b2c3d4e5f6a7b8c9d0e7",
+    "userId": {
+      "id": "65a1b2c3d4e5f6a7b8c9d0e1",
+      "name": "Juan Pérez",
+      "email": "juan@example.com",
+      "role": "customer"
+    },
+    "dishes": [
+      {
+        "dishId": {
+          "id": "65a1b2c3d4e5f6a7b8c9d0e2",
+          "name": "Margherita Pizza",
+          "price": 12.99,
+          "description": "Classic Italian pizza...",
+          "available": true
+        },
+        "quantity": 2,
+        "price": 12.99
+      },
+      {
+        "dishId": {
+          "id": "65a1b2c3d4e5f6a7b8c9d0e3",
+          "name": "Caesar Salad",
+          "price": 8.99,
+          "description": "Fresh romaine lettuce...",
+          "available": true
+        },
+        "quantity": 1,
+        "price": 8.99
+      }
+    ],
+    "total": 34.97,
+    "status": "pending",
+    "deliveryAddress": {
+      "street": "Calle Principal 123",
+      "city": "Ciudad de México",
+      "zipCode": "01000",
+      "notes": "Tocar el timbre"
+    },
+    "paymentMethod": "card",
+    "notes": "Sin cebolla por favor",
+    "createdAt": "2024-01-15T13:00:00.000Z",
+    "updatedAt": "2024-01-15T13:00:00.000Z"
+  }
+}
+```
+
+**Validaciones automáticas:**
+- Todos los platos deben existir en la base de datos
+- Todos los platos deben estar disponibles (`available: true`)
+- El precio se captura como snapshot (no cambia si el plato sube/baja de precio después)
+- El total se calcula automáticamente
+
+**Errores posibles:**
+- `401` - No autenticado
+- `400` - Uno o más platos no encontrados
+- `400` - Plato no disponible
+- `400` - Validación fallida (IDs inválidos, cantidad menor a 1, etc.)
+
+**Acceso:** Usuarios autenticados (Customer o Admin)
+
+---
+
+### Obtener Mis Órdenes
+
+```http
+GET /api/orders/my?page=1&limit=10&status=pending
+Authorization: Bearer {token}
+```
+
+**Query Parameters (todos opcionales):**
+- `page` (number): Página actual (default: 1)
+- `limit` (number): Resultados por página (default: 10, max: 100)
+- `status` (string): Filtrar por estado (`pending`, `confirmed`, `preparing`, `ready`, `delivered`, `cancelled`)
+
+**Response exitosa (200):**
+```json
+{
+  "success": true,
+  "count": 5,
+  "pagination": {
+    "page": 1,
+    "limit": 10,
+    "total": 5,
+    "pages": 1
+  },
+  "data": [
+    {
+      "id": "65a1b2c3d4e5f6a7b8c9d0e7",
+      "userId": {
+        "id": "65a1b2c3d4e5f6a7b8c9d0e1",
+        "name": "Juan Pérez",
+        "email": "juan@example.com"
+      },
+      "dishes": [
+        {
+          "dishId": {
+            "name": "Margherita Pizza",
+            "price": 12.99
+          },
+          "quantity": 2,
+          "price": 12.99
+        }
+      ],
+      "total": 25.98,
+      "status": "pending",
+      "createdAt": "2024-01-15T13:00:00.000Z"
+    }
+  ]
+}
+```
+
+**Acceso:** Usuario autenticado (solo ve sus propias órdenes)
+
+---
+
+### Obtener Todas las Órdenes (Admin)
+
+```http
+GET /api/orders?page=1&limit=10&status=confirmed
+Authorization: Bearer {admin_token}
+```
+
+**Query Parameters:** Igual que "Obtener Mis Órdenes"
+
+**Response:** Mismo formato que "Obtener Mis Órdenes" pero incluye órdenes de todos los usuarios
+
+**Acceso:** Solo Admin
+
+---
+
+### Obtener Orden por ID
+
+```http
+GET /api/orders/:id
+Authorization: Bearer {token}
+```
+
+**Ejemplo:**
+```http
+GET /api/orders/65a1b2c3d4e5f6a7b8c9d0e7
+```
+
+**Response exitosa (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "65a1b2c3d4e5f6a7b8c9d0e7",
+    "userId": {
+      "id": "65a1b2c3d4e5f6a7b8c9d0e1",
+      "name": "Juan Pérez",
+      "email": "juan@example.com",
+      "role": "customer"
+    },
+    "dishes": [
+      {
+        "dishId": {
+          "id": "65a1b2c3d4e5f6a7b8c9d0e2",
+          "name": "Margherita Pizza",
+          "price": 12.99
+        },
+        "quantity": 2,
+        "price": 12.99
+      }
+    ],
+    "total": 25.98,
+    "status": "pending",
+    "createdAt": "2024-01-15T13:00:00.000Z"
+  }
+}
+```
+
+**Errores posibles:**
+- `401` - No autenticado
+- `403` - No autorizado (usuarios solo pueden ver sus propias órdenes, admins pueden ver todas)
+- `404` - Orden no encontrada
+- `400` - ID inválido
+
+**Acceso:** 
+- Customer: Solo sus propias órdenes
+- Admin: Todas las órdenes
+
+---
+
+### Actualizar Estado de Orden (Admin)
+
+```http
+PATCH /api/orders/:id/status
+Authorization: Bearer {admin_token}
+```
+
+**Body:**
+```json
+{
+  "status": "confirmed"
+}
+```
+
+**Estados válidos y transiciones:**
+- `pending` → `confirmed` o `cancelled`
+- `confirmed` → `preparing` o `cancelled`
+- `preparing` → `ready` o `cancelled`
+- `ready` → `delivered`
+- `delivered` → (estado final, no puede cambiar)
+- `cancelled` → (estado final, no puede cambiar)
+
+**Response exitosa (200):**
+```json
+{
+  "success": true,
+  "message": "Order status updated successfully",
+  "data": {
+    "id": "65a1b2c3d4e5f6a7b8c9d0e7",
+    "status": "confirmed",
+    "updatedAt": "2024-01-15T14:00:00.000Z"
+  }
+}
+```
+
+**Errores posibles:**
+- `401` - No autenticado
+- `403` - No es admin
+- `404` - Orden no encontrada
+- `400` - Transición de estado inválida (ej: de `delivered` a `pending`)
+- `400` - Estado inválido
+
+**Acceso:** Solo Admin
+
+---
+
+### Cancelar Orden
+
+```http
+PATCH /api/orders/:id/cancel
+Authorization: Bearer {token}
+```
+
+**Response exitosa (200):**
+```json
+{
+  "success": true,
+  "message": "Order cancelled successfully",
+  "data": {
+    "id": "65a1b2c3d4e5f6a7b8c9d0e7",
+    "status": "cancelled",
+    "updatedAt": "2024-01-15T14:30:00.000Z"
+  }
+}
+```
+
+**Restricciones:**
+- Solo se puede cancelar si el estado es `pending` o `confirmed`
+- El usuario solo puede cancelar sus propias órdenes
+
+**Errores posibles:**
+- `401` - No autenticado
+- `403` - No es dueño de la orden
+- `404` - Orden no encontrada
+- `400` - No se puede cancelar (estado `preparing`, `ready` o `delivered`)
+
+**Acceso:** Usuario dueño de la orden
+
+---
+
+### Obtener Estadísticas de Órdenes (Admin)
+
+```http
+GET /api/orders/stats
+Authorization: Bearer {admin_token}
+```
+
+**Response exitosa (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "byStatus": [
+      {
+        "_id": "pending",
+        "count": 15,
+        "totalRevenue": 450.50
+      },
+      {
+        "_id": "confirmed",
+        "count": 8,
+        "totalRevenue": 320.75
+      },
+      {
+        "_id": "delivered",
+        "count": 42,
+        "totalRevenue": 1567.80
+      }
+    ],
+    "totalOrders": 65,
+    "totalRevenue": 2339.05,
+    "averageOrderValue": 35.98
+  }
+}
+```
+
+**Acceso:** Solo Admin
+
+---
+
+## 🔒 Autenticación y Roles
+
+### Cómo usar el token JWT
+
+Después de hacer login o registro, guarda el token que recibes y úsalo en el header `Authorization` de todas las peticiones protegidas:
+
+```
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+### Roles y permisos
+
+**Customer (cliente):**
+-  Ver platos
+-  Crear órdenes
+-  Ver sus propias órdenes
+-  Cancelar sus propias órdenes (si están en `pending` o `confirmed`)
+-  Crear/editar/eliminar platos
+-  Ver órdenes de otros usuarios
+-  Cambiar estado de órdenes
+
+**Admin (administrador):**
+-  Todo lo que puede hacer un Customer
+-  Crear/editar/eliminar platos
+-  Ver todas las órdenes
+-  Cambiar estado de órdenes
+-  Ver estadísticas
+
+---
+
+##  Manejo de Errores
+
+Todas las respuestas de error siguen el mismo formato:
+
+```json
+{
+  "success": false,
+  "message": "Descripción del error",
+  "errors": [
+    {
+      "field": "email",
+      "message": "Email already registered"
+    }
+  ]
+}
+```
+
+### Códigos de estado HTTP
+
+| Código | Significado | Cuándo ocurre |
+|--------|-------------|---------------|
+| `200` | OK | Operación exitosa |
+| `201` | Created | Recurso creado exitosamente |
+| `400` | Bad Request | Datos inválidos, validación fallida |
+| `401` | Unauthorized | No autenticado, token inválido o expirado |
+| `403` | Forbidden | Autenticado pero sin permisos (ej: customer intentando crear plato) |
+| `404` | Not Found | Recurso no encontrado |
+| `500` | Internal Server Error | Error del servidor |
+
+---
+
+##  Ejemplos con cURL
+
+### Registrar usuario
+
+```bash
+curl -X POST http://localhost:5000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Juan Pérez",
+    "email": "juan@example.com",
+    "password": "123456"
+  }'
+```
+
+### Login
+
+```bash
+curl -X POST http://localhost:5000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "juan@example.com",
+    "password": "123456"
+  }'
+```
+
+### Obtener platos
+
+```bash
+curl -X GET "http://localhost:5000/api/dishes?page=1&limit=5&available=true"
+```
+
+### Crear orden (con token)
+
+```bash
+curl -X POST http://localhost:5000/api/orders \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer TU_TOKEN_AQUI" \
+  -d '{
+    "dishes": [
+      {
+        "dishId": "65a1b2c3d4e5f6a7b8c9d0e2",
+        "quantity": 2
+      }
+    ],
+    "paymentMethod": "card"
+  }'
+```
+
+### Crear plato (admin)
+
+```bash
+curl -X POST http://localhost:5000/api/dishes \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ADMIN_TOKEN_AQUI" \
+  -d '{
+    "name": "Nueva Pizza",
+    "description": "Deliciosa pizza recién creada",
+    "price": 15.99,
+    "category": "main_course"
+  }'
+```
+
+---
+
+##  Testing
+
+### Health Check
+
+```bash
+curl http://localhost:5000/health
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Server is running",
+  "timestamp": "2024-01-15T15:00:00.000Z",
+  "uptime": 3600.5
+}
+```
+
+### Flujo completo de prueba
+
+1. **Registrar usuario customer**
+2. **Login y guardar token**
+3. **Obtener lista de platos**
+4. **Crear una orden con 2-3 platos**
+5. **Ver mis órdenes**
+6. **Registrar usuario admin**
+7. **Login como admin**
+8. **Crear un nuevo plato**
+9. **Actualizar estado de la orden creada anteriormente**
+
+---
+
+##  Estructura del Proyecto
+
+```
 restaurant-api/
 ├── src/
-│   ├── controllers/           # 3 controladores completos
-│   │   ├── authController.js  # register, login, getProfile
-│   │   ├── dishController.js  # CRUD completo + filtros
-│   │   └── orderController.js # Validación de dishes + cálculo total
-│   │
-│   ├── middleware/            # 3 tipos de middleware
-│   │   ├── auth.js           # JWT + role-based (isAdmin, isCustomer)
-│   │   ├── errorHandler.js   # ApiError class + global handler
-│   │   └── validate.js       # Joi validation wrapper
-│   │
-│   ├── models/               # 3 modelos con relaciones
-│   │   ├── User.js          # bcrypt hooks + JWT methods
-│   │   ├── Dish.js          # Validaciones + métodos estáticos
-│   │   └── Order.js         # populate() + cálculo automático de total
-│   │
-│   ├── routes/              # 3 archivos de rutas
-│   │   ├── authRoutes.js    # POST /register, /login
-│   │   ├── dishRoutes.js    # CRUD + admin protection
-│   │   └── orderRoutes.js   # Orders con validación
-│   │
-│   ├── validators/          # 3 validadores Joi
+│   ├── controllers/
+│   │   ├── authController.js
+│   │   ├── dishController.js
+│   │   └── orderController.js
+│   ├── middleware/
+│   │   ├── auth.js
+│   │   ├── errorHandler.js
+│   │   └── validate.js
+│   ├── models/
+│   │   ├── User.js
+│   │   ├── Dish.js
+│   │   └── Order.js
+│   ├── routes/
+│   │   ├── authRoutes.js
+│   │   ├── dishRoutes.js
+│   │   └── orderRoutes.js
+│   ├── validators/
 │   │   ├── authValidator.js
 │   │   ├── dishValidator.js
 │   │   └── orderValidator.js
-│   │
 │   ├── utils/
-│   │   ├── db.js           # Conexión MongoDB
-│   │   └── seed.js         # Datos de prueba
-│   │
-│   ├── app.js              # Configuración Express
-│   └── server.js           # Punto de entrada
-│
-├── .env.example            # Variables de entorno
+│   │   ├── db.js
+│   │   └── seed.js
+│   ├── app.js
+│   └── server.js
+├── .env
+├── .env.example
 ├── .gitignore
 ├── package.json
-├── README.md               # Documentación completa
-└── API_EXAMPLES.md         # Ejemplos de cURL
-User Model
-javascript{
-  name: String,
-  email: String (unique),
-  password: String (bcrypt hash),
-  role: Enum ['customer', 'admin'],
-  createdAt: Date
-}
+└── README.md
+```
 
-// Métodos:
-- comparePassword()
-- generateAuthToken()
-- getPublicProfile()
-Dish Model
-javascript{
-  name: String,
-  description: String,
-  price: Number,
-  available: Boolean (default: true),
-  category: Enum,
-  preparationTime: Number,
-  createdAt: Date
-}
+---
 
-// Métodos estáticos:
-- findAvailable()
-- findByCategory()
-Order Model (con relaciones)
-javascript{
-  userId: ObjectId → ref 'User',  // Populate automático
-  dishes: [{
-    dishId: ObjectId → ref 'Dish',  // Populate automático
-    quantity: Number,
-    price: Number  // Snapshot del precio
-  }],
-  total: Number,  // Calculado automáticamente
-  status: Enum ['pending', 'confirmed', 'preparing', 'ready', 'delivered', 'cancelled'],
-  deliveryAddress: Object,
-  paymentMethod: Enum,
-  createdAt: Date
-}
+##  Deployment
 
-// Populate automático en queries
- Sistema de Autenticación
-JWT Implementation
-javascript// Middleware de autenticación
-const auth = async (req, res, next) => {
-  // Extrae token del header Authorization
-  // Verifica con jwt.verify()
-  // Añade req.user
-}
+### Requisitos para producción
 
-// Middleware de roles
-const isAdmin = (req, res, next) => {
-  // Verifica req.user.role === 'admin'
-  // 403 si no es admin
-}
-Password Hashing
-javascript// Pre-save hook en User model
-userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
-});
+1. Usar MongoDB Atlas en vez de MongoDB local
+2. Cambiar `JWT_SECRET` a un valor seguro y único
+3. Configurar `NODE_ENV=production`
+4. Configurar `FRONTEND_URL` con el dominio real del frontend
+5. Habilitar HTTPS
+6. Configurar rate limiting apropiado
 
-Validación con Joi
-Ejemplo: Create Order Validator
-javascriptconst createOrderSchema = Joi.object({
-  dishes: Joi.array()
-    .items(
-      Joi.object({
-        dishId: Joi.string()
-          .regex(/^[0-9a-fA-F]{24}$/)
-          .required(),
-        quantity: Joi.number()
-          .integer()
-          .min(1)
-          .required()
-      })
-    )
-    .min(1)
-    .required(),
-  deliveryAddress: Joi.object({...}),
-  paymentMethod: Joi.string().valid('cash', 'card', 'online')
-});
+### Variables de entorno para producción
 
-Populate Automático
-javascript// En Order model - query middleware
-orderSchema.pre(/^find/, function(next) {
-  this.populate({
-    path: 'userId',
-    select: 'name email role'
-  }).populate({
-    path: 'dishes.dishId',
-    select: 'name price description available'
-  });
-  next();
-});
+```env
+NODE_ENV=production
+PORT=5000
+MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/food_ordering
+JWT_SECRET=clave_super_segura_generada_aleatoriamente_64_caracteres_minimo
+JWT_EXPIRE=7d
+BCRYPT_SALT_ROUNDS=12
+FRONTEND_URL=https://tu-dominio.com
+RATE_LIMIT_WINDOW_MS=900000
+RATE_LIMIT_MAX_REQUESTS=50
+```
 
-// Resultado:
-{
-  userId: {
-    id: "...",
-    name: "John Doe",
-    email: "john@example.com"
-  },
-  dishes: [{
-    dishId: {
-      id: "...",
-      name: "Pizza",
-      price: 12.99
-    },
-    quantity: 2,
-    price: 12.99  // Snapshot
-  }]
-}
+---
 
-Validación y Cálculo de Total
-javascriptconst createOrder = async (req, res) => {
-  // 1. Validar que todos los dishes existen
-  const dishIds = dishes.map(item => item.dishId);
-  const foundDishes = await Dish.find({ _id: { $in: dishIds } });
-  
-  if (foundDishes.length !== dishIds.length) {
-    throw new ApiError(400, 'One or more dishes not found');
-  }
-  
-  // 2. Verificar disponibilidad
-  for (const item of dishes) {
-    const dish = foundDishes.find(d => d._id.toString() === item.dishId);
-    if (!dish.available) {
-      throw new ApiError(400, `Dish "${dish.name}" not available`);
-    }
-  }
-  
-  // 3. Crear order items con price snapshot
-  const orderItems = dishes.map(item => {
-    const dish = foundDishes.find(d => d._id.toString() === item.dishId);
-    return {
-      dishId: dish._id,
-      quantity: item.quantity,
-      price: dish.price  // ← Snapshot del precio actual
-    };
-  });
-  
-  // 4. Calcular total
-  const total = orderItems.reduce((sum, item) => 
-    sum + (item.price * item.quantity), 0
-  );
-  
-  // 5. Crear orden
-  const order = await Order.create({
-    userId: req.user._id,
-    dishes: orderItems,
-    total
-  });
-};
+##  Licencia
 
-Manejo de Errores Centralizado
-javascript// Custom Error Class
-class ApiError extends Error {
-  constructor(statusCode, message, errors = null) {
-    super(message);
-    this.statusCode = statusCode;
-    this.errors = errors;
-    this.isOperational = true;
-  }
-}
+MIT License
 
-// Global Error Handler
-const errorHandler = (err, req, res, next) => {
-  let statusCode = err.statusCode || 500;
-  let message = err.message || 'Internal server error';
-  
-  // Mongoose validation errors
-  if (err.name === 'ValidationError') {
-    statusCode = 400;
-    errors = Object.values(err.errors).map(e => ({
-      field: e.path,
-      message: e.message
-    }));
-  }
-  
-  // Mongoose duplicate key
-  if (err.code === 11000) {
-    statusCode = 400;
-    message = 'Duplicate field value';
-  }
-  
-  res.status(statusCode).json({
-    success: false,
-    message,
-    errors
-  });
-};
+---
 
-Paginación Implementada
-javascriptconst getAllDishes = async (req, res) => {
-  const { page = 1, limit = 10 } = req.query;
-  
-  const skip = (page - 1) * limit;
-  
-  const dishes = await Dish.find(filter)
-    .skip(skip)
-    .limit(parseInt(limit));
-  
-  const total = await Dish.countDocuments(filter);
-  
-  res.json({
-    success: true,
-    count: dishes.length,
-    pagination: {
-      page: parseInt(page),
-      limit: parseInt(limit),
-      total,
-      pages: Math.ceil(total / limit)
-    },
-    data: dishes
-  });
-};
+## Autor
 
-Cómo Usar
-1. Instalación
-bashcd restaurant-api
-npm install
-2. Configuración
-bashcp .env.example .env
-# Editar .env con tu MongoDB URI
-3. Poblar Base de Datos
-bashnode src/utils/seed.js
-4. Ejecutar
-bashnpm run dev  # Desarrollo
-npm start    # Producción
-5. Probar
-bash# Credenciales de prueba:
-Admin: admin@restaurant.com / admin123
-Customer: john@customer.com / password123
+**Fernando**
+- GitHub: [@F3RUN4ND0](https://github.com/F3RUN4ND0)
+
+---
+
+## Contribuciones
+
+Las contribuciones son bienvenidas. Por favor:
+
+1. Fork el proyecto
+2. Crea una rama para tu feature (`git checkout -b feature/nueva-funcionalidad`)
+3. Commit tus cambios (`git commit -m 'Agregar nueva funcionalidad'`)
+4. Push a la rama (`git push origin feature/nueva-funcionalidad`)
+5. Abre un Pull Request
+
+---
+
+**¿Encontraste un bug?** Abre un issue en GitHub  
+**¿Tienes una pregunta?** Contacta al equipo de desarrollo
+
+---
+
+ **¡Gracias por usar Food Ordering System API!** 
